@@ -2,11 +2,7 @@
 // for linear algebra.
 //
 // Copyright (C) 2008-2010 Gael Guennebaud <gael.guennebaud@inria.fr>
-// Copyright (C) 2010 Jitse Niesen <jitse@maths.leeds.ac.uk>
-//
-// This Source Code Form is subject to the terms of the Mozilla
-// Public License v. 2.0. If a copy of the MPL was not distributed
-// with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+// Cop
 
 #ifndef EIGEN_SELFADJOINTEIGENSOLVER_H
 #define EIGEN_SELFADJOINTEIGENSOLVER_H
