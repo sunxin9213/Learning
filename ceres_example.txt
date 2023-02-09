@@ -1,0 +1,201 @@
+#pragma once
+
+#include <ceres/ceres.h>
+#include <iostream>
+#include <Eigen/Core>
+
+using namespace std;
+
+
+
+
+
+class EstimateTransformMatrix
+{
+    public:
+    EstimateTransformMatrix( Eigen::Isometry2d m_front,  Eigen::Isometry2d m_rear_observ):m_front_(m_front),m_rear_observ_(m_rear_observ){}
+
+    template <typename T>
+    bool operator()(const T *const  x_y_theta, T* residual)const
+    {
+        typedef Eigen::Transform<T, 2, Eigen::Isometry> Iso_2_T;
+        typedef Eigen::Matrix<T, 2, 1> V_21_T;
+
+        Iso_2_T m_optmization = Eigen::Transform<T, 2, Eigen::Isometry>::Identity();
+        Eigen::Rotation2D<T> rotate_v(x_y_theta[2]);
+        m_optmization.rotate(rotate_v);
+        m_optmization.pretranslate(V_21_T(x_y_theta[0], x_y_theta[1]));
+
+        Iso_2_T m_front_T;
+        Iso_2_T m_rear_observ_T;
+
+        m_front_T(0, 0) = T(m_front_(0, 0));
+        m_front_T(0, 1) = T(m_front_(0, 1));
+        m_front_T(0, 2) = T(m_front_(0, 2));
+        m_front_T(1, 0) = T(m_front_(1, 0));
+        m_front_T(1, 1) = T(m_front_(1, 1));
+        m_front_T(1, 2) = T(m_front_(1, 2));
+        m_front_T(2, 0) = T(m_front_(2, 0));
+        m_front_T(2, 1) = T(m_front_(2, 1));
+        m_front_T(2, 2) = T(m_front_(2, 2));
+
+        m_rear_observ_T(0, 0) = T(m_rear_observ_(0, 0));
+        m_rear_observ_T(0, 1) = T(m_rear_observ_(0, 1));
+        m_rear_observ_T(0, 2) = T(m_rear_observ_(0, 2));
+        m_rear_observ_T(1, 0) = T(m_rear_observ_(1, 0));
+        m_rear_observ_T(1, 1) = T(m_rear_observ_(1, 1));
+        m_rear_observ_T(1, 2) = T(m_rear_observ_(1, 2));
+        m_rear_observ_T(2, 0) = T(m_rear_observ_(2, 0));
+        m_rear_observ_T(2, 1) = T(m_rear_observ_(2, 1));
+        m_rear_observ_T(2, 2) = T(m_rear_observ_(2, 2));
+
+        Eigen::Transform<T, 2, Eigen::Isometry> Diff_Mat = (m_front_T.inverse() * m_optmization).inverse() * (m_front_T.inverse() * m_rear_observ_T);//在前雷达坐标系下计算误差
+        T * factors;//theta
+        factors[0] = T(0.6);
+        factors[1] = T(0.2);
+        factors[2] = T(0.2);
+
+        T * theta_diff;
+        theta_diff[0] = atan2(Diff_Mat(1, 0), Diff_Mat(0, 0));
+
+        residual[0] = factors[0] * theta_diff[0] + factors[1] * Diff_Mat(0, 2) + factors[2] * Diff_Mat(1, 2);
+
+        return true;
+    }
+
+    Eigen::Isometry2d m_front_;
+    Eigen::Isometry2d m_rear_observ_;
+};
+
+bool ceres_solver(Eigen::Isometry2d front_scan_T, 
+                Eigen::Isometry2d plicp_rear_scan_T,
+                Eigen::Isometry2d icp_rear_scan_T,
+                double * x_y_theta_result)
+{
+
+    ceres::Problem problem;
+
+
+    problem.AddResidualBlock((new ceres::AutoDiffCostFunction<EstimateTransformMatrix, 1, 3>(new EstimateTransformMatrix(front_scan_T, plicp_rear_scan_T))),
+                                 nullptr, 
+                                 x_y_theta_result);
+
+    EstimateTransformMatrix *DiffMatrixCostFunction2 = new EstimateTransformMatrix(front_scan_T, icp_rear_scan_T);
+    problem.AddResidualBlock(new ceres::AutoDiffCostFunction<EstimateTransformMatrix, 1, 3>(DiffMatrixCostFunction2),
+                                nullptr, 
+                                 x_y_theta_result);
+
+    ceres::Solver::Options solver_options;
+    solver_options.linear_solver_type=ceres::DENSE_QR;
+    solver_options.minimizer_progress_to_stdout= true;
+    ceres::Solver::Summary summary;
+    ceres::Solve(solver_options,&problem,&summary);
+    cout<<"summary:\n"<<summary.BriefReport();
+
+    return summary.IsSolutionUsable();    
+}
+
+// template <typename T>
+// void SymmetricGeometricDistanceTerms(
+//         const Eigen::Matrix<T,3,3> &H, //单应性矩阵变量
+//         const Eigen::Matrix<T,2,1> &x1, //前一帧匹配点变量
+//         const Eigen::Matrix<T,2,1> &x2, //当前帧匹配点变量
+//         T &residual）//代价函数变量
+// {
+//     typedef Eigen::Matrix<T,3,1> E_Mat31_T;//定义齐次坐标类型
+//     T forward_error[2];
+//     E_Mat31_T x(x1(0),x1(1),T(1.0)); //将前一帧匹配点的像素坐标转为齐次坐标
+//     E_Mat31_T y(x2(0),x2(1),T(1.0)); //将当前帧匹配点的像素坐标转为齐次坐标
+//     E_Mat31_T H_x = H*x; //计算前一帧匹配点在当前帧中的重投影坐标
+//     H_x/=H_x(2);  //重投影坐标归一化
+//     forward_error[0]=H_x(0)-y(0);  //计算重投影的x方向误差
+//     forward_error[1]=H_x(1)-y(1);  //计算重投影的y方向误差
+//     //计算重投影误差的二范数作为代价函数误差
+//     residual=forward_error[0]*forward_error[0]+forward_error[1]*forward_error[1];
+// };
+
+// //构建代价函数结构
+// class HomographySymmetricGeometricCostFunctor{
+// public:
+//     HomographySymmetricGeometricCostFunctor(const E_Mat21 &x,const E_Mat21 &y)
+//             :_x(x),_y(y){} //x,y是传入代价函数的每对匹配点
+//     //重定义()运算符号并求代价函数
+//     template <typename T>  
+//     //homography_parameters是优化变量，此例子是单应性矩阵H,residuals是代价函数误差值都是一维向量
+//     bool operator()(const T*homography_parameters,T*residuals)const{
+//         typedef Eigen::Matrix<T,3,3> E_Mat33_T;//Eigen下的3*3double矩阵
+//         typedef Eigen::Matrix<T,2,1> E_Mat21_T;//Eigen下的2*1double矩阵
+//         E_Mat33_T cH(homography_parameters);//将data指针的一维向量转为矩阵类型．
+//         E_Mat21_T cx(T(_x(0)),T(_x(1)));//将opencv下的前一帧匹配点坐标转为结构中需要用的类型
+//         E_Mat21_T cy(T(_y(0)),T(_y(1)));//将opencv下的当前一帧匹配点坐标转为结构中需要用的类型
+//         SymmetricGeometricDistanceTerms<T>(cH,cx,cy,residuals[0]);//调用代价函数求解公式
+//         return true;
+//     }
+//     const E_Mat21 _x;
+//     const E_Mat21 _y;
+// };
+
+
+/*
+#include <ceres/ceres.h> 
+#include <iostream> 
+//#include <opencv2/core/core.hpp> 
+#include <vector> 
+ 
+// 一个仿函数用于设置残差计算 
+class ExpResidual { 
+ public: 
+  ExpResidual(double x, double y) : x_(x), y_(y) {} 
+ 
+  // 残差计算 
+  // 注意残差计算operator后边是先优化变量再残差，和AutoDiff中相反 
+  template <typename T> 
+  bool operator()(const T* m, const T* c, T* residual) const { 
+    residual[0] = T(y_) - ceres::exp(m[0] * T(x_) + c[0]); 
+    return true; 
+  } 
+ 
+  const double x_; 
+  const double y_; 
+}; 
+ 
+int  ceres_solver(){ 
+  double m = 0.0, c = 0.0; 
+  //cv::RNG rng; 
+  double w_sigma = 0.2; 
+ 
+  ceres::Problem problem; // 1. 建立一个最小二乘问题 
+  for (int i = 0; i < 100; ++i) { 
+    // 我们按照m = 0.3, c = 0.1来对100个点进行赋值，并给予白噪声 
+    double y_with_noise = 
+        std::exp(0.3 * i / 100.0 + 0.1) + 0; 
+    // 2. 建立一个CostFunction, 如果是AutoDiff自动求解就如下 
+    // AutoDiffCostFunction<仿函数类，残差的维度，剩下的一堆是优化变量的维度> 
+    ceres::CostFunction* cost_function = 
+        new ceres::AutoDiffCostFunction<ExpResidual, 1, 1, 1>( 
+            new ExpResidual(i / 100.0, y_with_noise)); 
+    // 3. 添加残差模块，用problem.AddResidualBlock(costFunc, 鲁邦核函数，优化变量们用指针传) 
+    problem.AddResidualBlock(cost_function, new ceres::CauchyLoss(0.5), &m, &c); 
+  } 
+ 
+  // 4. 设置求解器和输出报告 
+  ceres::Solver::Options options; 
+  options.linear_solver_type = ceres::DENSE_NORMAL_CHOLESKY; 
+  options.minimizer_progress_to_stdout = true; 
+ 
+  ceres::Solver::Summary summary; 
+  ceres::Solve(options, &problem, &summary); 
+ 
+  std::cout << summary.BriefReport() << std::endl; 
+  std::cout << "m = " << m << " c = " << c << std::endl; 
+  return 0; 
+} 
+*/
+
+
+
+
+
+
+
+
